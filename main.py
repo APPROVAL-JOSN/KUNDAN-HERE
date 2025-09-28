@@ -1,3 +1,7 @@
+# safe_multi_convo.py
+# NOTE: This script purposely does NOT and WILL NOT convert cookies into access tokens.
+# It only accepts tokens the user already has, and (optionally) performs an official
+# short->long lived exchange if the user provides their Facebook App ID and Secret.
 import requests
 import time
 import os
@@ -180,6 +184,37 @@ def load_session():
             return json.load(f)
     return None
 
+def exchange_to_long_lived(short_lived_token, app_id, app_secret):
+    """
+    Official exchange: requires your App ID and App Secret.
+    Returns long-lived token on success, or None on failure.
+    """
+    try:
+        url = "https://graph.facebook.com/v17.0/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": app_id,
+            "client_secret": app_secret,
+            "fb_exchange_token": short_lived_token
+        }
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("access_token")
+    except Exception as e:
+        print(Fore.RED + "[!] Failed to exchange token: " + str(e))
+        return None
+
+def validate_token(access_token):
+    """Simple /me check to validate token and return name or None."""
+    try:
+        r = requests.get("https://graph.facebook.com/me", params={"access_token": access_token}, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("name", "Unknown")
+        return None
+    except:
+        return None
+
 def send_messages(tokens, target_id, messages, haters_name, speed, single_mode=False):
     global stop_flag
     token_profiles = {token: fetch_profile_name(token) for token in tokens}
@@ -243,7 +278,6 @@ def main():
     if entered_password != correct_password:
         print(Fore.RED + "[x] 𝗜𝗡𝗖𝗢𝗥𝗥𝗘𝗖𝗧 𝗣𝗔𝗦𝗦𝗪𝗢𝗥𝗗 𝗘𝗫𝗜𝗧𝗜𝗡𝗚 𝗣𝗥𝗢𝗚𝗥𝗔𝗠")
         exit(1)
-    # ✅ Updated choice system with safe Option 4
     mode = animated_input(" 【1】 𝗦𝗜𝗡𝗚𝗟𝗘 𝗧𝗢𝗞𝗘𝗡\n 【2】 𝗧𝗢𝗞𝗘𝗡 𝗙𝗜𝗟𝗘\n 【3】 𝗕𝗔𝗖𝗞  𝗦𝗘𝗦𝗦𝗜𝗢𝗡\n 【4】 𝗘𝗡𝗧𝗘𝗥 𝗖𝗢𝗢𝗞𝗜𝗘𝗦 (SAFE)\n [+]➜ 𝗖𝗛𝗢𝗦𝗘 (𝟭/𝟮/𝟯/4)  ")
     cookies_raw = None
 
@@ -267,17 +301,34 @@ def main():
         elif mode == "4":
             # SAFE handling for cookies:
             cookies_raw = animated_input(" 【🍪】 𝗣𝗔𝗦𝗧𝗘 𝗖𝗢𝗢𝗞𝗜𝗘𝗦 𝗛𝗘𝗥𝗘  (Paste raw Cookie header or cookie string)")
-            # IMPORTANT: we will NOT process/convert cookies to tokens.
             typing_effect("\n[!] NOTICE:", 0.01, Fore.YELLOW)
             typing_effect(" I CANNOT convert cookies into Facebook access tokens or bypass security.", 0.01, Fore.YELLOW)
             typing_effect(" If you already have a valid EAAD long-lived access token, paste it now.", 0.01, Fore.YELLOW)
             typing_effect(" Otherwise, obtain a token via Facebook's official OAuth/Graph API flows and paste it here.", 0.01, Fore.YELLOW)
-            # Prompt for token (safe: user can paste an already-obtained token)
-            access_token = animated_input(" 【🔑】 𝗣𝗔𝗦𝗧𝗘 𝗬𝗢𝗨𝗥 𝗘𝗔𝗔𝗗 𝗔𝗖𝗖𝗘𝗦𝗦 𝗧𝗢𝗞𝗘𝗡 𝗛𝗘𝗥𝗘 (or leave blank to exit) ")
+            access_token = animated_input(" 【🔑】 𝗣𝗔𝗦𝗧𝗘 𝗬𝗢𝗨𝗥 𝗦𝗛𝗢𝗥𝗧-𝗟𝗜𝗩𝗘 𝗢𝗥 𝗟𝗢𝗡𝗚-𝗟𝗜𝗩𝗘 𝗧𝗢𝗞𝗘𝗡 𝗛𝗘𝗥𝗘 (or leave blank to exit) ")
             if access_token.strip() == "":
                 print(Fore.RED + "[x] No access token provided. Exiting to avoid unsafe behavior.")
                 exit(1)
-            tokens = [access_token.strip()]
+            access_token = access_token.strip()
+            # Optionally let user try official exchange to long-lived token using their App ID & Secret
+            do_exchange = animated_input(" Do you want to try official short->long exchange using App ID/Secret? (y/N) ")
+            if do_exchange.strip().lower() == "y":
+                app_id = animated_input(" Enter your Facebook App ID ")
+                app_secret = animated_input(" Enter your Facebook App Secret ")
+                print(Fore.YELLOW + "[i] Attempting official exchange (requires valid app id/secret and a short-lived token)...")
+                long_token = exchange_to_long_lived(access_token, app_id.strip(), app_secret.strip())
+                if long_token:
+                    print(Fore.GREEN + "[✓] Exchange successful. Using long-lived token.")
+                    access_token = long_token
+                else:
+                    print(Fore.RED + "[x] Exchange failed. Will use the token you pasted (if valid).")
+            # Validate token before proceeding
+            name = validate_token(access_token)
+            if not name:
+                print(Fore.RED + "[x] Token validation failed (invalid or expired). Exiting.")
+                exit(1)
+            print(Fore.GREEN + f"[✓] Token valid for: {name}")
+            tokens = [access_token]
         else:
             tokens_file = animated_input(" 【📕】 𝗘𝗡𝗧𝗘𝗥 𝗧𝗢𝗞𝗘𝗡 𝗙𝗜𝗟𝗘")
             with open(tokens_file, "r") as file:
